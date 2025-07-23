@@ -1,0 +1,16 @@
+{
+  "name": "basic-ssh2-server",
+  "version": "1.0.0",
+  "description": "",
+  "main": "server.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [],
+  "author": "gavrilyak@gmail.com",
+  "license": "ISC",
+  "dependencies": {
+    "node-pty-prebuilt-multiarch": "^0.10.1-pre.5",
+    "ssh2": "^1.16.0"
+  }
+}

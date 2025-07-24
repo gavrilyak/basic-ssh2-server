@@ -2,15 +2,21 @@ const ssh2 = require("ssh2");
 const net = require("net");
 const NodePTY = require("node-pty-prebuilt-multiarch");
 const child_process = require("child_process");
+const os = require("os");
+const { existsSync } = require("fs");
+
+const SIGNALS = Object.fromEntries(
+  Object.entries(os.constants.signals).map(([k, v]) => [v, k]),
+);
 
 function createServer(opts) {
-  const { hostKeys, authorizedKeys, shell, logger } = opts;
+  const { hostKeys, authorizedKeys, shell, logger: console } = opts;
 
-  return new ssh2.Server({ hostKeys }, (client) => {
-    logger.log("Client connected!");
-
+  return new ssh2.Server({ hostKeys, debug: console.warn }, (client) => {
+    console.log("Client connected!");
+    client.on("handshake", () => console.log("handshake"));
     client.on("authentication", (ctx) => {
-      logger.log("auth:", ctx.method, ctx?.key?.algo);
+      console.log("auth:", ctx.method, ctx?.key?.algo);
       if (
         ctx.method === "publickey" &&
         ctx.key.algo == "ssh-ed25519" &&
@@ -25,33 +31,33 @@ function createServer(opts) {
     client.on("ready", () => {
       client.on("session", (accept, _reject) => {
         const session = accept();
-
-        session.on("exec", (accept, _reject, payload) => {
+        session.once("exec", (accept, _reject, payload) => {
           const command = payload.command;
-          const channel = accept();
-          logger.log("exec:", payload);
+          const stream = accept();
+          console.log("exec:", payload);
           const child = child_process.spawn(command, {
             shell: shell,
             cwd: process.env.HOME,
           });
-          channel.stdin.pipe(child.stdin);
-          child.stdout.pipe(channel.stdout);
-          child.stderr.pipe(channel.stderr);
-          child.on("exit", (code) => {
-            logger.log("exec child exit:", code);
-            channel.exit(0);
-            channel.end();
+          child.on("exit", (exitCode, signal) => {
+            console.log("exec child exit:", exitCode, signal);
+            stream.exit(signal || exitCode);
           });
+          child.on("close", () => stream.end());
+
+          stream.stdin.pipe(child.stdin);
+          child.stderr.pipe(stream.stderr);
+          child.stdout.pipe(stream.stdout, { end: false });
         });
 
         session.on("pty", (accept, _reject, info) => {
-          logger.log("PTY", info);
+          console.log("pty", info);
           session.ptyInfo = info;
           accept();
         });
 
         session.on("shell", (accept, _reject) => {
-          const shellStream = accept();
+          const stream = accept();
           const pty = NodePTY.spawn(shell, [], {
             name: session?.ptyInfo?.term || "xterm-color",
             cols: session?.ptyInfo?.cols || 80,
@@ -67,43 +73,44 @@ function createServer(opts) {
             pty.resize(info.cols, info.rows);
           });
 
-          pty.onData((data) => shellStream.write(data));
-
-          pty.onExit((_e, _signal) => shellStream.close());
-
-          shellStream.on("data", (data) => pty.write(data));
-
-          shellStream.on("close", () => {
-            pty.kill();
+          pty.onData((data) => stream.write(data));
+          pty.onExit(({ exitCode, signal }) => {
+            const signalName = SIGNALS[signal];
+            console.log("pty exit", exitCode, signalName);
+            stream.exit(signalName || exitCode);
+            stream.close();
           });
+          stream.on("data", (data) => pty.write(data));
+          stream.on("close", () => pty.kill());
         });
 
         session.on("env", (accept, reject, info) => {
-          logger.log("env", accept, reject, info);
+          console.log("env", accept, reject, info);
+          accept();
         });
 
         session.on("subsystem", (accept, reject, info) => {
-          logger.log("subsystem", accept, reject, info);
+          console.log("subsystem", accept, reject, info);
           reject();
         });
 
         session.on("auth-agent", (accept, reject) => {
-          logger.log("auth-agent", accept, reject);
+          console.log("auth-agent", accept, reject);
           reject();
         });
       });
     });
 
     client.on("error", (context) => {
-      logger.log("client.error:", context);
+      console.log("client.error:", context);
     });
 
     client.on("request", (accept, reject, name, info) => {
-      logger.log("request", accept, reject, name, info);
+      console.log("request", accept, reject, name, info);
       if (name === "tcpip-forward") {
         const chosenPort = info.bindPort || 6666;
         let forwarderSrv = new net.Server(function (socket) {
-          logger.log("forwardOut", info.bindAddr, chosenPort);
+          console.log("forwardOut", info.bindAddr, chosenPort);
           client.forwardOut(
             info.bindAddr,
             chosenPort,
@@ -112,7 +119,7 @@ function createServer(opts) {
             (err, upstream) => {
               if (err) {
                 socket.end();
-                return logger.error("Forwarding failed: " + err);
+                return console.error("Forwarding failed: " + err);
               }
               upstream.pipe(socket);
               socket.pipe(upstream);
@@ -134,11 +141,11 @@ function createServer(opts) {
         });
 
         forwarderSrv.on("error", function (e) {
-          logger.log("not listening", e);
+          console.log("not listening", e);
           reject();
         });
       } else if (name === "cancel-tcpip-forward") {
-        logger.log("cancel-tcpip-forward");
+        console.log("cancel-tcpip-forward");
         accept();
       } else {
         reject();
@@ -146,7 +153,7 @@ function createServer(opts) {
     });
 
     client.on("tcpip", (accept, reject, info) => {
-      logger.log("TCPIP", accept, reject, info);
+      console.log("TCPIP", accept, reject, info);
       //return reject(); //TODO - pipe
       var stream = accept();
       var tcp = new net.Socket();
@@ -162,12 +169,12 @@ function createServer(opts) {
     });
 
     client.on("openssh.streamlocal", (accept, reject, info) => {
-      logger.log("openssh.streamlocal", accept, reject, info);
+      console.log("openssh.streamlocal", accept, reject, info);
       reject();
     });
 
     client.on("end", () => {
-      logger.log("client disconnected");
+      console.log("client disconnected");
     });
   });
 }

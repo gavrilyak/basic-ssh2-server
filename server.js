@@ -1,18 +1,18 @@
 const ssh2 = require("ssh2");
-const net = require("net");
 const NodePTY = require("node-pty-prebuilt-multiarch");
+const net = require("net");
 const child_process = require("child_process");
 const os = require("os");
-const { existsSync } = require("fs");
+const process = require("process");
 
 const SIGNALS = Object.fromEntries(
   Object.entries(os.constants.signals).map(([k, v]) => [v, k]),
 );
 
 function createServer(opts) {
-  const { hostKeys, authorizedKeys, shell, logger: console } = opts;
+  const { hostKeys, debug, authorizedKeys, shell, logger: console } = opts;
 
-  return new ssh2.Server({ hostKeys, debug: console.warn }, (client) => {
+  return new ssh2.Server({ hostKeys, debug }, (client) => {
     console.log("Client connected!");
     client.on("handshake", () => console.log("handshake"));
     client.on("authentication", (ctx) => {
@@ -68,7 +68,7 @@ function createServer(opts) {
           });
 
           session.on("window-change", (accept, _reject, info) => {
-            //console.log("window-change", info);
+            console.log("window-change", info);
             accept && accept();
             pty.resize(info.cols, info.rows);
           });
@@ -159,7 +159,7 @@ function createServer(opts) {
       var tcp = new net.Socket();
 
       tcp.pipe(stream);
-      pipe.pipe(tcp);
+      stream.pipe(tcp);
 
       tcp.connect({
         host: info.destIP, //127.0.0.1
